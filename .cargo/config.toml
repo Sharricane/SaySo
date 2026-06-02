@@ -1,8 +1,6 @@
-# 默认就把 SaySo 编成 Windows 可执行文件。
-# WSL2 里跑 `cargo build` 即可，无需 --target。
+# 默认把 SaySo 编成 Windows MSVC ABI 的 .exe。
+# 配合 `cargo-xwin`（用户级，无需 root，自动拉 Windows SDK 片段）使用：
+#   cargo xwin build --release
+# 仍可手动 `cargo build --target x86_64-unknown-linux-gnu` 跑单元测试。
 [build]
-target = "x86_64-pc-windows-gnu"
-
-[target.x86_64-pc-windows-gnu]
-linker = "x86_64-w64-mingw32-gcc"
-ar = "x86_64-w64-mingw32-ar"
+target = "x86_64-pc-windows-msvc"

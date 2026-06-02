@@ -59,25 +59,25 @@ STT 和 LLM 都通过 **OpenAI 兼容接口**调用：
 
 ## 开发环境（重要）
 
-代码在 **WSL2 (Ubuntu)** 里写，交叉编译到 Windows，**不在 Windows 装 Rust**。
+代码在 **WSL2 (Arch Linux)** 里写，交叉编译到 **Windows MSVC ABI**，**不在 Windows 装 Rust，也不需要系统 mingw**。
 
 ```bash
-# 一次性安装
-sudo apt install mingw-w64 pkg-config libssl-dev
-rustup target add x86_64-pc-windows-gnu
+# 一次性安装（全部用户级，无需 root）
+cargo install cargo-xwin
+rustup target add x86_64-pc-windows-msvc
 
-# 每次编译
-cargo build --target x86_64-pc-windows-gnu --release
+# 每次编译（.cargo/config.toml 已设默认 target，直接 cargo xwin build 即可）
+cargo xwin build --release
 
-# 运行（WSL interop 把它当 Windows 进程跑）
-./target/x86_64-pc-windows-gnu/release/sayso.exe
+# 运行：WSL interop 把它当 Windows 进程跑，能访问 Windows 麦克风 / 快捷键 / 剪贴板
+./target/x86_64-pc-windows-msvc/release/sayso.exe
 ```
 
-**Cargo 配置**：在 `.cargo/config.toml` 设置默认 target 为 `x86_64-pc-windows-gnu`，省去每次手敲 `--target`。
+**为什么是 xwin 而非 mingw**：mingw-w64 在 Arch 是系统包，要 root 才能装；`cargo-xwin` 是用户级 cargo subcommand，按需下载 MSVC SDK 片段到用户目录。开发机无 root 权限时唯一可行方案，构建产物为标准 PE32+ Windows 可执行文件。
 
-**测试策略**：单元测试可在 WSL2 直接跑（用 `cargo test --target x86_64-unknown-linux-gnu`，但要避开依赖 Windows API 的模块）；集成 / 手动测试通过运行 .exe 完成。
+**API key 注入**：开发期把 `GROQ_API_KEY` 放进项目根 `.env`（已 gitignore），`dotenvy::dotenv()` 在 `main()` 入口加载。生产用户走配置文件 / OS keyring。
 
-**如果 mingw 链接器对某 crate 失败**：切到 `cargo-xwin`（MSVC 模拟工具链）。
+**测试策略**：单元测试用 `cargo test --target x86_64-unknown-linux-gnu`，避开依赖 Windows API 的模块；集成/手动测试通过运行 .exe。
 
 ## 架构原则
 

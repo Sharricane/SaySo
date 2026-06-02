@@ -52,15 +52,17 @@
 
 ## 开发环境
 
-在 **WSL2 里写代码、交叉编译到 Windows**，不在 Windows 装 Rust：
+在 **WSL2 里写代码、交叉编译到 Windows**，不在 Windows 装 Rust。**全部用户级，不需要 root**：
 
 ```bash
-sudo apt install mingw-w64
-rustup target add x86_64-pc-windows-gnu
+cargo install cargo-xwin          # 用户级安装，自动拉 Windows SDK 片段
+rustup target add x86_64-pc-windows-msvc
 
-cargo build --target x86_64-pc-windows-gnu --release
-./target/x86_64-pc-windows-gnu/release/sayso.exe  # WSL interop 直接以 Windows 进程跑起来
+cargo xwin build --release
+./target/x86_64-pc-windows-msvc/release/sayso.exe   # WSL interop 直接以 Windows 进程跑
 ```
+
+API key 放项目根的 `.env` 文件（已在 `.gitignore` 里），或导出为系统环境变量。
 
 ## 参考项目
 
