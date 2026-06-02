@@ -22,26 +22,51 @@
 1. 在 Windows Terminal / iTerm2 里用 Claude Code 时口述编程需求
 2. 在 claude.ai 等浏览器页面里口述输入
 
-## 技术栈
+## 技术栈（纯 Rust）
 
 | 模块 | 选型 |
 |---|---|
-| 桌面框架 | Tauri 2.x |
-| 后端语言 | Rust |
-| 前端 | React + Vite + TypeScript + Tailwind |
+| GUI（设置窗口） | `eframe` + `egui` |
+| 系统托盘 | `tray-icon` |
+| 全局快捷键 | `rdev` |
 | 音频采集 | `cpal` |
-| 全局快捷键 | `tauri-plugin-global-shortcut` |
-| 剪贴板 | `tauri-plugin-clipboard-manager` |
+| WAV 编码 | `hound` |
+| HTTP 客户端 | `reqwest`（rustls） |
+| 异步运行时 | `tokio` |
+| 剪贴板 | `arboard` |
 | 模拟粘贴 | `enigo` |
-| STT | OpenAI Whisper API（或 Groq 兼容接口） |
-| LLM 润色 | Claude Haiku 4.5（或 OpenAI GPT-4o-mini） |
+| 配置序列化 | `serde` + `toml` |
+| 错误处理 | `anyhow` + `thiserror` |
+| 日志 | `tracing` + `tracing-subscriber` |
+
+整个仓库 **0 行 JS/TS/Python**，单一 Rust crate。
+
+## 默认服务
+
+| 步骤 | 服务 | 模型 | 成本 |
+|---|---|---|---|
+| STT | Groq | `whisper-large-v3-turbo` | 免费 tier 覆盖（2000 req/天，7200 秒/小时） |
+| LLM 润色 | Groq | `llama-3.3-70b-versatile` | 免费 tier 覆盖 |
+
+接口都是 OpenAI 兼容格式，**改配置文件里的 `base_url` 和 `model` 就能换任意兼容服务**（OpenAI / Anthropic / 自部署）。
+
+## 开发环境
+
+在 **WSL2 里写代码、交叉编译到 Windows**，不在 Windows 装 Rust：
+
+```bash
+sudo apt install mingw-w64
+rustup target add x86_64-pc-windows-gnu
+
+cargo build --target x86_64-pc-windows-gnu --release
+./target/x86_64-pc-windows-gnu/release/sayso.exe  # WSL interop 直接以 Windows 进程跑起来
+```
 
 ## 参考项目
 
-- [Whisperi](https://github.com/xarthurx/whisperi) — Tauri + 云端 API，架构最贴近
-- [local-dictation-app](https://github.com/fiorelorenzo/local-dictation-app) — Tauri + Svelte 项目结构参考
-- [VoiceTypr](https://github.com/moinulmoin/voicetypr) — Wispr Flow 风格 UI 参考
-- [Awesome-Whisper-Apps](https://github.com/danielrosehill/Awesome-Whisper-Apps) — 同类工具横向对比
+- [Handy](https://github.com/cjpais/Handy) — `cpal` / `rdev` / 状态机参考（其余忽略）
+- [whisrs](https://github.com/y0sif/whisrs) — 多后端 ASR 抽象
+- [light-whisper](https://github.com/sypsyp97/light-whisper) — LLM 润色服务层设计
 
 ## 开发计划
 

@@ -8,24 +8,112 @@
 1. 在终端里用 Claude Code 时直接口述需求
 2. 在浏览器里用 claude.ai 时口述输入
 
-## 技术栈（已确定，不要更换）
+## 技术栈（已定，不要更换）
 
-- **Tauri 2.x**（Rust 后端 + Web 前端，跨平台桌面框架）
-- **前端**：React + Vite + TypeScript + Tailwind CSS
-- **音频**：`cpal` 录麦克风 → 16kHz mono WAV
-- **STT**：OpenAI 兼容的 Whisper API（运行时通过设置面板配置 base URL + API key，默认 OpenAI）
-- **LLM 润色**：OpenAI 兼容接口（默认 Anthropic Claude，可换 OpenAI/Groq）
-- **全局快捷键**：`tauri-plugin-global-shortcut`
-- **剪贴板**：`tauri-plugin-clipboard-manager`
-- **模拟粘贴**：`enigo`
+**纯 Rust，单一 crate，0 行其他语言。**
+
+| 模块 | crate |
+|---|---|
+| GUI（设置窗口） | `eframe` / `egui` |
+| 系统托盘 | `tray-icon` |
+| 全局快捷键 | `rdev` |
+| 音频采集 | `cpal` |
+| WAV 编码 | `hound` |
+| HTTP | `reqwest`（默认 features 关掉，启 `rustls-tls` + `json` + `multipart`） |
+| 异步 | `tokio`（features：`rt-multi-thread`、`macros`、`sync`、`time`） |
+| 剪贴板 | `arboard` |
+| 模拟键盘粘贴 | `enigo` |
+| 序列化 | `serde`、`toml` |
+| 错误 | `anyhow`（业务）、`thiserror`（库错误类型） |
+| 日志 | `tracing`、`tracing-subscriber` |
+
+## API 抽象
+
+STT 和 LLM 都通过 **OpenAI 兼容接口**调用：
+
+- `Stt` trait：`async fn transcribe(&self, wav: Bytes) -> Result<String>`
+- `Llm` trait：`async fn polish(&self, raw: &str) -> Result<String>`
+
+唯一具体实现：`OpenAiCompatible { base_url, model, api_key }`。配置里改 base_url + model 名即可切换任意 OpenAI 兼容服务。
+
+## 默认配置
+
+| 项 | 默认 |
+|---|---|
+| STT base_url | `https://api.groq.com/openai/v1` |
+| STT model | `whisper-large-v3-turbo` |
+| LLM base_url | `https://api.groq.com/openai/v1` |
+| LLM model | `llama-3.3-70b-versatile` |
+| 全局快捷键 | `Right Ctrl` 按住录音、松开停止 |
+| 录音格式 | 16kHz / mono / 16-bit PCM → WAV |
+| 录音最大时长 | 60 秒（超时自动停止） |
+| 润色 system prompt | "Clean up this dictation transcript. Remove filler words, add punctuation, fix obvious errors. Preserve meaning and language. Output only the cleaned text, nothing else." |
+
+## 配置文件位置
+
+- Windows: `%APPDATA%\SaySo\config.toml`
+- macOS: `~/Library/Application Support/SaySo/config.toml`
+- 首启动若不存在则用默认值生成
+
+**API key 优先级**：环境变量 `GROQ_API_KEY` > 配置文件 `api_key` 字段。配置文件**必须**在 `.gitignore` 内。
+
+## 开发环境（重要）
+
+代码在 **WSL2 (Ubuntu)** 里写，交叉编译到 Windows，**不在 Windows 装 Rust**。
+
+```bash
+# 一次性安装
+sudo apt install mingw-w64 pkg-config libssl-dev
+rustup target add x86_64-pc-windows-gnu
+
+# 每次编译
+cargo build --target x86_64-pc-windows-gnu --release
+
+# 运行（WSL interop 把它当 Windows 进程跑）
+./target/x86_64-pc-windows-gnu/release/sayso.exe
+```
+
+**Cargo 配置**：在 `.cargo/config.toml` 设置默认 target 为 `x86_64-pc-windows-gnu`，省去每次手敲 `--target`。
+
+**测试策略**：单元测试可在 WSL2 直接跑（用 `cargo test --target x86_64-unknown-linux-gnu`，但要避开依赖 Windows API 的模块）；集成 / 手动测试通过运行 .exe 完成。
+
+**如果 mingw 链接器对某 crate 失败**：切到 `cargo-xwin`（MSVC 模拟工具链）。
 
 ## 架构原则
 
 - **不做"模拟打字"式文本注入**。所有输出走「写入剪贴板 → 模拟 Ctrl+V / Cmd+V」。
 - 核心交互是 **按住-说话-松开**（push-to-talk），不是 toggle。
-- API key 等敏感信息**永远不进 git**，存到 OS 安全存储（`tauri-plugin-stronghold` 或系统 keyring）；本地配置文件必须被 `.gitignore` 排除。
-- 录音文件用完即删，不持久化到磁盘（除非用户主动开启历史功能）。
+- API key 等敏感信息**永远不进 git**。
+- 录音 PCM 全程在内存中，**不写临时文件**（一次录音 60s × 16kHz × 2byte = 1.92MB，内存完全可放）。
 - 注释只写"为什么"，不写"是什么"。
+
+## 模块拆分
+
+```
+src/
+├── main.rs          入口：起 tokio runtime + tray + 各线程
+├── app.rs           中心状态机 (Idle/Recording/Transcribing/Polishing/Pasting)
+├── config.rs        配置 load/save（TOML）
+├── hotkey.rs        rdev 全局快捷键监听（独立 std::thread，rdev 不支持 async）
+├── audio.rs         cpal 录音 → 内存 Vec<i16>
+├── encode.rs        PCM → WAV bytes（hound::WavWriter 写到 Cursor）
+├── stt.rs           Stt trait + OpenAiCompatible 实现
+├── llm.rs           Llm trait + OpenAiCompatible 实现
+├── paste.rs         arboard 写剪贴板 + enigo 模拟 Ctrl+V
+├── tray.rs          tray-icon + 状态图标切换
+└── ui/
+    ├── mod.rs
+    └── settings.rs  eframe + egui 设置窗口
+```
+
+线程模型：
+- 主线程：托盘事件循环
+- rdev 监听线程：std::thread
+- 音频采集线程：cpal 自己起的
+- tokio runtime：处理 HTTP 请求
+- egui 窗口线程：仅在打开设置窗口时启动
+
+模块间通信用 `tokio::sync::mpsc`，避免 `Arc<Mutex<...>>` 状态泥潭。
 
 ## 目标平台
 
@@ -39,43 +127,50 @@
 
 每个 Phase 必须独立跑通后再进下一个，**不要超前实现**。
 
-### Phase 1：Windows MVP（最小可用链路）
-1. Tauri 项目骨架 + 系统托盘图标
-2. 全局快捷键监听（默认 F5，按住录音、松开停止）
-3. cpal 录音 → 临时 WAV 文件（用完删除）
-4. 调 Whisper API 转写
-5. 把转写文本写入剪贴板
-6. enigo 模拟一次 Ctrl+V
-7. 托盘图标显示三态：idle / recording / transcribing
+### Phase 1：Windows MVP
+1. 项目骨架 + `.cargo/config.toml` 默认 windows-gnu target
+2. 系统托盘图标 + 退出菜单
+3. rdev 全局快捷键监听（默认 Right Ctrl，按住录音、松开停止）
+4. cpal 录音 → 内存 PCM
+5. hound 编码 WAV
+6. 调 Groq Whisper API 转写
+7. arboard 写入剪贴板
+8. enigo 模拟一次 Ctrl+V
+9. 托盘图标三态：idle / recording / transcribing
 
-**Phase 1 不做**：润色、设置面板、剪贴板恢复、历史记录。
+**Phase 1 不做**：LLM 润色、设置窗口、剪贴板恢复、历史记录。
 
-### Phase 2：润色 + 设置面板
-- LLM 润色（去口癖、加标点、保持原意）
-- 设置 UI：API key、快捷键、模型、润色 prompt 自定义
-- 剪贴板恢复（用完恢复原内容）
-- 历史记录（本地 SQLite，可关闭）
+### Phase 2：LLM 润色 + 设置窗口
+- 调 Groq Llama-3.3-70B 润色（trait 已就位，加实现 + 串到流程）
+- egui 设置窗口：base_url / model / api_key / 快捷键 / 润色 prompt
+- 剪贴板恢复（粘贴完恢复原内容）
+- 简单历史记录（内存中保留最近 N 条）
 
 ### Phase 3：macOS 适配
 - 权限引导（麦克风 + 辅助功能）
-- 签名 / 公证流程
-- 快捷键改用 macOS 习惯（Cmd 系，避开系统占用）
+- 签名 / 公证
+- 快捷键改 macOS 习惯
 
 ### Phase 4：分发
-- GitHub Actions 自动打包 Windows `.exe` + macOS `.dmg`
-- 自动更新机制
+- GitHub Actions 自动构建 Windows .exe（在 WSL2 同款 mingw 路径下）
+- macOS .dmg
+- 自动更新
+
+## 禁止事项
+
+- ❌ 不要换框架（不许引入 Tauri / Electron / Qt / React / Vue / Python）
+- ❌ 不要做 Linux 原生（X11/Wayland）支持
+- ❌ 不要打包本地 Whisper / LLM 模型
+- ❌ 不要把 API key、`.env`、录音 wav 提交进 git
+- ❌ 不要在 Phase 1 加 UI 设置面板或 LLM 润色
+- ❌ 不要写多语言注释或多余注释——只在"为什么不显而易见"时写一行
 
 ## 参考实现
 
 需要技术决策时，先查这几个仓库的对应代码：
-- https://github.com/xarthurx/whisperi — Tauri + 云端 API，整体架构最贴近本项目
-- https://github.com/fiorelorenzo/local-dictation-app — Tauri 项目目录结构、状态机
-- https://github.com/moinulmoin/voicetypr — UI 风格
 
-## 禁止事项
-
-- ❌ 不要做 Linux 原生（X11/Wayland）支持
-- ❌ 不要打包本地 Whisper 模型
-- ❌ 不要把 API key、`.env`、录音 wav 提交进 git
-- ❌ 不要在 Phase 1 里加 UI 设置面板
-- ❌ 不要换框架（不要改用 Electron / Qt / Python）
+- https://github.com/cjpais/Handy — `cpal`、`rdev`、状态机
+- https://github.com/y0sif/whisrs — 多后端 ASR 抽象
+- https://github.com/sypsyp97/light-whisper — LLM 润色服务层组织
+- https://github.com/emilk/egui — eframe / egui 官方示例
+- https://github.com/tauri-apps/tray-icon — tray-icon 独立用法（不依赖 Tauri）
