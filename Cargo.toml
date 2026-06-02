@@ -1,0 +1,20 @@
+[package]
+name = "sayso"
+version = "0.1.0"
+edition = "2021"
+description = "Push-to-talk voice dictation for Claude Code and the browser"
+repository = "https://github.com/Sharricane/SaySo"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

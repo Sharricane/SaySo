@@ -1,0 +1,8 @@
+# 默认就把 SaySo 编成 Windows 可执行文件。
+# WSL2 里跑 `cargo build` 即可，无需 --target。
+[build]
+target = "x86_64-pc-windows-gnu"
+
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"
