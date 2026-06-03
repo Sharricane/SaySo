@@ -12,6 +12,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 
+# 网络：rustls 走系统 root CA，避开 openssl 依赖；multipart 用于上传 wav
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 音频：cpal 调 WASAPI 录麦，hound 编 WAV
+cpal = "0.15"
+hound = "3"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
