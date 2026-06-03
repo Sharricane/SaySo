@@ -21,6 +21,11 @@ serde_json = "1"
 cpal = "0.15"
 hound = "3"
 
+# 输入输出：rdev 监听全局快捷键，arboard 写剪贴板，enigo 模拟键盘粘贴
+rdev = "0.5"
+arboard = "3"
+enigo = "0.6"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
