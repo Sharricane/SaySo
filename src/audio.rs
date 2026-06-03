@@ -17,11 +17,11 @@ impl Recording {
             .unwrap_or(0)
     }
 
-    /// 经验阈值：500/32768 ≈ -36 dBFS。低于此值视为"没人说话"，
-    /// 避免触发 Whisper 在纯静音上的幻觉（典型表现：返回日文短句、订阅广告语）。
-    /// Phase 2 设置面板会让用户根据自己环境噪音上下调。
-    pub fn is_silent(&self) -> bool {
-        self.peak_amplitude() < 500
+    /// 低于此 peak amplitude 阈值视为"没人说话"，跳过 Whisper 避免幻觉。
+    /// 500/32768 ≈ -36 dBFS 是安静办公室的经验值；嘈杂环境用户应调高
+    /// （比如 800-1500），极安静环境调低（200-300）。
+    pub fn is_silent(&self, threshold: i16) -> bool {
+        self.peak_amplitude() < threshold
     }
 
     pub fn duration_secs(&self) -> f32 {
