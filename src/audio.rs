@@ -120,8 +120,14 @@ impl AudioEngine {
     }
 
     pub fn begin_session(&self) {
-        self.buffer.lock().expect("buffer poisoned").clear();
-        // 严格顺序：先 clear 再 set collecting=true，确保新会话不会带上一次的残尾
+        // 即使 mutex 被毒化（其他线程持锁时 panic）也强行往前——清掉数据 + 解除毒化。
+        let mut b = self.buffer.lock().unwrap_or_else(|e| {
+            tracing::warn!("audio buffer mutex was poisoned, recovering");
+            e.into_inner()
+        });
+        b.clear();
+        drop(b);
+        self.buffer.clear_poison();
         self.collecting.store(true, Ordering::Release);
     }
 
@@ -129,7 +135,13 @@ impl AudioEngine {
         self.collecting.store(false, Ordering::Release);
         // 给音频回调几毫秒落地最后一批样本
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let samples = std::mem::take(&mut *self.buffer.lock().expect("buffer poisoned"));
+        let mut b = self.buffer.lock().unwrap_or_else(|e| {
+            tracing::warn!("audio buffer mutex was poisoned on session end");
+            e.into_inner()
+        });
+        let samples = std::mem::take(&mut *b);
+        drop(b);
+        self.buffer.clear_poison();
         Recording {
             samples,
             sample_rate: self.sample_rate,
@@ -137,27 +149,32 @@ impl AudioEngine {
     }
 }
 
+// cpal 的回调跑在它内部线程上。如果回调里 panic（譬如样本除零、buf push OOM），
+// 整个进程会 abort。这里用 try_lock + 错误降级 + 通道数兜底，保证回调永不 panic。
 fn append_mono_f32(buf: &Mutex<Vec<i16>>, data: &[f32], channels: usize) {
-    let mut b = buf.lock().expect("buffer poisoned");
-    for chunk in data.chunks(channels) {
-        let avg: f32 = chunk.iter().sum::<f32>() / channels as f32;
+    let Ok(mut b) = buf.lock() else { return };
+    let ch = channels.max(1);
+    for chunk in data.chunks(ch) {
+        let avg: f32 = chunk.iter().sum::<f32>() / ch as f32;
         let clamped = (avg * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32);
         b.push(clamped as i16);
     }
 }
 
 fn append_mono_i16(buf: &Mutex<Vec<i16>>, data: &[i16], channels: usize) {
-    let mut b = buf.lock().expect("buffer poisoned");
-    for chunk in data.chunks(channels) {
-        let avg: i32 = chunk.iter().map(|&s| s as i32).sum::<i32>() / channels as i32;
+    let Ok(mut b) = buf.lock() else { return };
+    let ch = channels.max(1);
+    for chunk in data.chunks(ch) {
+        let avg: i32 = chunk.iter().map(|&s| s as i32).sum::<i32>() / ch as i32;
         b.push(avg as i16);
     }
 }
 
 fn append_mono_u16(buf: &Mutex<Vec<i16>>, data: &[u16], channels: usize) {
-    let mut b = buf.lock().expect("buffer poisoned");
-    for chunk in data.chunks(channels) {
-        let avg: i32 = chunk.iter().map(|&s| s as i32 - 32768).sum::<i32>() / channels as i32;
+    let Ok(mut b) = buf.lock() else { return };
+    let ch = channels.max(1);
+    for chunk in data.chunks(ch) {
+        let avg: i32 = chunk.iter().map(|&s| s as i32 - 32768).sum::<i32>() / ch as i32;
         b.push(avg as i16);
     }
 }

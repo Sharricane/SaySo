@@ -39,6 +39,8 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    install_panic_hook();
+
     let api_key = std::env::var("GROQ_API_KEY")
         .context("GROQ_API_KEY not set — put it in .env at the project root")?;
     if !(api_key.len() == 56 && api_key.starts_with("gsk_")) {
@@ -75,6 +77,9 @@ async fn main() -> Result<()> {
     let mut hotkey_rx = hotkey::spawn_listener(target_key);
 
     loop {
+        // catch_unwind 把 paste/clipboard/enigo 等可能 panic 的同步代码隔离开，
+        // 单次会话崩溃不拖垮主进程。注意：async 内不能直接跨 await 用 catch_unwind，
+        // 所以 handle_one_session 内部对易 panic 操作单独包了 catch_unwind。
         if let Err(e) = handle_one_session(
             &mut hotkey_rx,
             &engine,
@@ -88,6 +93,19 @@ async fn main() -> Result<()> {
             tracing::error!("session error: {e:#}");
         }
     }
+}
+
+fn install_panic_hook() {
+    // 替换默认 panic 处理器：用 tracing 打印 panic 内容，
+    // 在 release（panic=abort）下也能保留崩溃现场到 stderr。
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("!! PANIC !! {info}");
+        if let Some(loc) = info.location() {
+            tracing::error!("  at {}:{}:{}", loc.file(), loc.line(), loc.column());
+        }
+        default_hook(info);
+    }));
 }
 
 async fn handle_one_session(
@@ -159,6 +177,29 @@ async fn handle_one_session(
         }
     };
 
-    paste::paste(&final_text).context("paste failed")?;
+    // paste 里调 arboard + enigo，跟系统 IO 强耦合，偶发 panic 不能拖垮主进程。
+    // catch_unwind 兜住 panic，记录后继续下一轮会话。
+    let final_for_paste = final_text.clone();
+    let paste_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        paste::paste(&final_for_paste)
+    }));
+    match paste_outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::error!("paste failed: {e:#}"),
+        Err(p) => {
+            let msg = panic_message(&p);
+            tracing::error!("paste panicked: {msg} — final_text='{final_text}'");
+        }
+    }
     Ok(())
+}
+
+fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        format!("<non-string panic payload, type={:?}>", (**p).type_id())
+    }
 }
