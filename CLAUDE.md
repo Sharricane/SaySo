@@ -59,25 +59,30 @@ STT 和 LLM 都通过 **OpenAI 兼容接口**调用：
 
 ## 开发环境（重要）
 
-代码在 **WSL2 (Arch Linux)** 里写，交叉编译到 **Windows MSVC ABI**，**不在 Windows 装 Rust，也不需要系统 mingw**。
+代码在 **WSL2 (Arch Linux)** 里写，交叉编译到 **Windows GNU ABI**，**全部用户级，不需要 root，不需要 mingw 系统包，不需要 clang**。
 
 ```bash
-# 一次性安装（全部用户级，无需 root）
-cargo install cargo-xwin
-rustup target add x86_64-pc-windows-msvc
+# 一次性安装（用户级 cargo subcommand）
+cargo install cargo-zigbuild
+rustup target add x86_64-pc-windows-gnu
 
-# 每次编译（.cargo/config.toml 已设默认 target，直接 cargo xwin build 即可）
-cargo xwin build --release
+# 下载 zig 工具链（单文件二进制，自包含，含 clang）
+curl -L https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
+  | tar -xJ -C ~/.local
+ln -sf ~/.local/zig-x86_64-linux-0.16.0/zig ~/.local/bin/zig
 
-# 运行：WSL interop 把它当 Windows 进程跑，能访问 Windows 麦克风 / 快捷键 / 剪贴板
-./target/x86_64-pc-windows-msvc/release/sayso.exe
+# 每次编译（.cargo/config.toml 已设默认 target，直接 cargo zigbuild）
+cargo zigbuild --release
+
+# 运行：WSL interop 当 Windows 进程跑，访问 Windows 麦克风 / 快捷键 / 剪贴板
+./target/x86_64-pc-windows-gnu/release/sayso.exe
 ```
 
-**为什么是 xwin 而非 mingw**：mingw-w64 在 Arch 是系统包，要 root 才能装；`cargo-xwin` 是用户级 cargo subcommand，按需下载 MSVC SDK 片段到用户目录。开发机无 root 权限时唯一可行方案，构建产物为标准 PE32+ Windows 可执行文件。
+**工具链选择历程**：先试 mingw（系统包，需 root，pass）；再试 cargo-xwin（用户级 MSVC SDK，但需要 clang-cl，依赖系统 clang，pass）；最后定型 cargo-zigbuild + Zig（Zig 单文件自带 clang，完全用户级）。
 
-**API key 注入**：开发期把 `GROQ_API_KEY` 放进项目根 `.env`（已 gitignore），`dotenvy::dotenv()` 在 `main()` 入口加载。生产用户走配置文件 / OS keyring。
+**API key 注入**：开发期把 `GROQ_API_KEY` 放进项目根 `.env`（已 gitignore），`dotenvy::dotenv()` 在 `main()` 入口加载。中国用户在 .env 里加 `HTTPS_PROXY=http://127.0.0.1:7890`（reqwest 走本地 Clash）。
 
-**测试策略**：单元测试用 `cargo test --target x86_64-unknown-linux-gnu`，避开依赖 Windows API 的模块；集成/手动测试通过运行 .exe。
+**测试策略**：单元测试 `cargo check --target x86_64-unknown-linux-gnu` 避开 Windows-only crate；集成 / 手动测试通过运行 .exe。
 
 ## 架构原则
 

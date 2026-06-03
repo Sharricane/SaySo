@@ -52,17 +52,31 @@
 
 ## 开发环境
 
-在 **WSL2 里写代码、交叉编译到 Windows**，不在 Windows 装 Rust。**全部用户级，不需要 root**：
+在 **WSL2 里写代码、交叉编译到 Windows**，不在 Windows 装 Rust，不需要 root，不需要装系统 mingw：
 
 ```bash
-cargo install cargo-xwin          # 用户级安装，自动拉 Windows SDK 片段
-rustup target add x86_64-pc-windows-msvc
+# 一次性安装（全部用户级）
+cargo install cargo-zigbuild
+rustup target add x86_64-pc-windows-gnu
 
-cargo xwin build --release
-./target/x86_64-pc-windows-msvc/release/sayso.exe   # WSL interop 直接以 Windows 进程跑
+# 下载 zig 工具链（单文件自包含，~55MB）
+curl -L https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
+  | tar -xJ -C ~/.local
+ln -sf ~/.local/zig-x86_64-linux-0.16.0/zig ~/.local/bin/zig
+
+# 编译
+cargo zigbuild --release
+
+# 跑（WSL interop 自动以 Windows 进程启动，访问 Windows 麦克风 / 代理）
+./target/x86_64-pc-windows-gnu/release/sayso.exe
 ```
 
-API key 放项目根的 `.env` 文件（已在 `.gitignore` 里），或导出为系统环境变量。
+`.env` 文件放项目根（已 gitignore）：
+```
+GROQ_API_KEY=gsk_xxxxxxxx
+# 中国大陆用户：让 reqwest 走本地 Clash
+HTTPS_PROXY=http://127.0.0.1:7890
+```
 
 ## 参考项目
 

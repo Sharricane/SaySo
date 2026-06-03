@@ -1,6 +1,6 @@
-# 默认把 SaySo 编成 Windows MSVC ABI 的 .exe。
-# 配合 `cargo-xwin`（用户级，无需 root，自动拉 Windows SDK 片段）使用：
-#   cargo xwin build --release
-# 仍可手动 `cargo build --target x86_64-unknown-linux-gnu` 跑单元测试。
+# 默认把 SaySo 编成 Windows GNU ABI 的 .exe。
+# 配合 cargo-zigbuild + Zig 工具链使用（用户级，无 root，无 mingw 系统包）：
+#   cargo zigbuild --release
+# 仍可手动 `cargo check --target x86_64-unknown-linux-gnu` 跑单元测试。
 [build]
-target = "x86_64-pc-windows-msvc"
+target = "x86_64-pc-windows-gnu"
