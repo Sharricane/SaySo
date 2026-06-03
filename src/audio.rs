@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 pub struct Recording {
     pub samples: Vec<i16>,
@@ -10,36 +10,39 @@ pub struct Recording {
 
 impl Recording {
     pub fn peak_amplitude(&self) -> i16 {
-        self.samples.iter().map(|s| s.saturating_abs()).max().unwrap_or(0)
+        self.samples
+            .iter()
+            .map(|s| s.saturating_abs())
+            .max()
+            .unwrap_or(0)
     }
 
     /// 经验阈值：500/32768 ≈ -36 dBFS。低于此值视为"没人说话"，
     /// 避免触发 Whisper 在纯静音上的幻觉（典型表现：返回日文短句、订阅广告语）。
+    /// Phase 2 设置面板会让用户根据自己环境噪音上下调。
     pub fn is_silent(&self) -> bool {
         self.peak_amplitude() < 500
     }
+
+    pub fn duration_secs(&self) -> f32 {
+        self.samples.len() as f32 / self.sample_rate as f32
+    }
 }
 
-/// 固定时长录音（同步阻塞）。Phase 1A 用过，1C 之后留作调试/测试便利。
-#[allow(dead_code)]
-pub fn record(duration: Duration) -> Result<Recording> {
-    let (stop, handle) = start_recording()?;
-    std::thread::sleep(duration);
-    let _ = stop.send(());
-    handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("audio thread panicked"))?
+/// 常驻音频引擎：cpal 流在 app 启动时建好并保持播放，
+/// 默认不写入缓冲；按下快捷键时翻转 `collecting` 原子布尔后才开始累积样本。
+///
+/// 目的：消除每次按下快捷键时 build_input_stream + WASAPI 激活带来的
+/// 100-300ms 录音盲区——用户说出的第一个字常常因此被吞掉。
+pub struct AudioEngine {
+    sample_rate: u32,
+    buffer: Arc<Mutex<Vec<i16>>>,
+    collecting: Arc<AtomicBool>,
+    _stream: cpal::Stream,
 }
 
-/// 启动一个 cpal 录音线程，返回 (stop_signal, join_handle)。
-/// 调用方在想停止时 `stop.send(())`，再 `handle.join()` 拿到 Recording。
-/// 用于 push-to-talk：按下时 start，松开时 stop。
-pub fn start_recording() -> Result<(
-    std::sync::mpsc::Sender<()>,
-    std::thread::JoinHandle<Result<Recording>>,
-)> {
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
-    let handle = std::thread::spawn(move || -> Result<Recording> {
+impl AudioEngine {
+    pub fn start() -> Result<Self> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -57,31 +60,49 @@ pub fn start_recording() -> Result<(
             sample_rate,
             channels,
             format = ?sample_format,
-            "input stream configured"
+            "warming audio engine"
         );
 
         let buffer: Arc<Mutex<Vec<i16>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(sample_rate as usize * 2)));
-        let buffer_cb = buffer.clone();
+            Arc::new(Mutex::new(Vec::with_capacity(sample_rate as usize * 4)));
+        let collecting = Arc::new(AtomicBool::new(false));
+
+        let buf_cb = buffer.clone();
+        let coll_cb = collecting.clone();
         let stream_config: cpal::StreamConfig = config.clone().into();
         let err_fn = |err| tracing::error!("audio stream error: {err}");
 
         let stream = match sample_format {
             cpal::SampleFormat::F32 => device.build_input_stream(
                 &stream_config,
-                move |data: &[f32], _: &_| append_mono_f32(&buffer_cb, data, channels),
+                move |data: &[f32], _: &_| {
+                    if !coll_cb.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    append_mono_f32(&buf_cb, data, channels);
+                },
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::I16 => device.build_input_stream(
                 &stream_config,
-                move |data: &[i16], _: &_| append_mono_i16(&buffer_cb, data, channels),
+                move |data: &[i16], _: &_| {
+                    if !coll_cb.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    append_mono_i16(&buf_cb, data, channels);
+                },
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::U16 => device.build_input_stream(
                 &stream_config,
-                move |data: &[u16], _: &_| append_mono_u16(&buffer_cb, data, channels),
+                move |data: &[u16], _: &_| {
+                    if !coll_cb.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    append_mono_u16(&buf_cb, data, channels);
+                },
                 err_fn,
                 None,
             )?,
@@ -89,21 +110,31 @@ pub fn start_recording() -> Result<(
         };
 
         stream.play().context("failed to start input stream")?;
-        // 阻塞到收到停止信号；channel 关闭也视为停止
-        let _ = stop_rx.recv();
-        drop(stream);
 
-        let samples = Arc::try_unwrap(buffer)
-            .map_err(|_| anyhow::anyhow!("buffer still shared after stream drop"))?
-            .into_inner()
-            .map_err(|e| anyhow::anyhow!("buffer mutex poisoned: {e}"))?;
-
-        Ok(Recording {
-            samples,
+        Ok(AudioEngine {
             sample_rate,
+            buffer,
+            collecting,
+            _stream: stream,
         })
-    });
-    Ok((stop_tx, handle))
+    }
+
+    pub fn begin_session(&self) {
+        self.buffer.lock().expect("buffer poisoned").clear();
+        // 严格顺序：先 clear 再 set collecting=true，确保新会话不会带上一次的残尾
+        self.collecting.store(true, Ordering::Release);
+    }
+
+    pub fn end_session(&self) -> Recording {
+        self.collecting.store(false, Ordering::Release);
+        // 给音频回调几毫秒落地最后一批样本
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let samples = std::mem::take(&mut *self.buffer.lock().expect("buffer poisoned"));
+        Recording {
+            samples,
+            sample_rate: self.sample_rate,
+        }
+    }
 }
 
 fn append_mono_f32(buf: &Mutex<Vec<i16>>, data: &[f32], channels: usize) {

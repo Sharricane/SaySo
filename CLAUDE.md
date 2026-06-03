@@ -147,7 +147,12 @@ src/
 
 ### Phase 2：LLM 润色 + 设置窗口
 - 调 Groq Llama-3.3-70B 润色（trait 已就位，加实现 + 串到流程）
-- egui 设置窗口：base_url / model / api_key / 快捷键 / 润色 prompt
+  - system prompt 要点：输出语言与输入一致；保留技术专有名词（React、Whisper、API…）；不扩写、不增加开场白；直接输出干净文本
+- egui 设置窗口：base_url / model / api_key / 快捷键 / 润色 prompt 自定义
+- **静音灵敏度可调**：滑块控制 `Recording::is_silent` 阈值（默认 500/i16，~-36 dBFS），配合"录 3 秒环境采样自动校准"按钮
+- **触发模式可切换**：
+  - 长按模式（默认 = 当前实现）：按住 hotkey 录音，松开停止
+  - 切换模式：点一下 hotkey 开始，再点一下结束（适合长段口述、避免按累）
 - 剪贴板恢复（粘贴完恢复原内容）
 - 简单历史记录（内存中保留最近 N 条）
 
