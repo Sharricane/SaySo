@@ -1,6 +1,7 @@
 mod audio;
 mod encode;
 mod hotkey;
+mod llm;
 mod paste;
 mod stt;
 
@@ -29,18 +30,23 @@ async fn main() -> Result<()> {
     let hotkey_name = std::env::var("SAYSO_HOTKEY").unwrap_or_else(|_| "RightAlt".into());
     let target_key = hotkey::parse_hotkey(&hotkey_name)?;
 
-    // 启动即预热 cpal 流，消除按下快捷键时 100-300ms 的录音盲区
     let engine = Arc::new(AudioEngine::start()?);
 
-    tracing::info!(
-        "SaySo ready — hold {hotkey_name:?} to talk, release to transcribe & paste. Ctrl-C to quit."
-    );
+    let stt_cfg = stt::Config::from_env(api_key.clone());
+    let llm_cfg = llm::Config::from_env(api_key);
 
-    let stt_cfg = stt::Config::from_env(api_key);
+    tracing::info!(
+        "SaySo ready — hold {} to talk, release to transcribe & paste. Ctrl-C to quit.",
+        hotkey_name
+    );
+    if llm_cfg.enabled {
+        tracing::info!("polish enabled: {}", llm_cfg.model);
+    }
+
     let mut hotkey_rx = hotkey::spawn_listener(target_key);
 
     loop {
-        if let Err(e) = handle_one_session(&mut hotkey_rx, &engine, &stt_cfg).await {
+        if let Err(e) = handle_one_session(&mut hotkey_rx, &engine, &stt_cfg, &llm_cfg).await {
             tracing::error!("session error: {e:#}");
         }
     }
@@ -50,6 +56,7 @@ async fn handle_one_session(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<HotkeyEvent>,
     engine: &AudioEngine,
     stt_cfg: &stt::Config,
+    llm_cfg: &llm::Config,
 ) -> Result<()> {
     hotkey::wait_for(rx, HotkeyEvent::Press).await?;
     engine.begin_session();
@@ -80,14 +87,28 @@ async fn handle_one_session(
     let wav = encode::pcm_to_wav(&recording.samples, recording.sample_rate)?;
     tracing::info!("uploading {}KB to Groq Whisper…", wav.len() / 1024);
 
-    let text = stt::transcribe(wav, stt_cfg).await?;
-    let text = text.trim();
-    if text.is_empty() {
+    let raw = stt::transcribe(wav, stt_cfg).await?;
+    let raw = raw.trim();
+    if raw.is_empty() {
         tracing::warn!("Whisper returned empty text");
         return Ok(());
     }
+    tracing::info!("raw:     {raw}");
 
-    tracing::info!("✓ {text}");
-    paste::paste(text).context("paste failed")?;
+    // LLM 润色失败不阻断流程——退化到 raw 文本继续粘贴
+    let final_text = match llm::polish(raw, llm_cfg).await {
+        Ok(polished) => {
+            if polished != raw {
+                tracing::info!("polished: {polished}");
+            }
+            polished
+        }
+        Err(e) => {
+            tracing::warn!("LLM polish failed ({e:#}), falling back to raw");
+            raw.to_string()
+        }
+    };
+
+    paste::paste(&final_text).context("paste failed")?;
     Ok(())
 }
