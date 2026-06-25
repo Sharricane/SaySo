@@ -1,0 +1,38 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+config.local.*
+sayso.config.json
+*.log
+
+# Audio scratch
+recordings/
+*.wav
+*.mp3

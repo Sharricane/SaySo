@@ -1,0 +1,6 @@
+# macOS 子项目：显式指定本机 target。
+# 必须写死——cargo 会从当前目录向上合并 .cargo/config，仓库根目录那份强制 Windows
+# 的 [build].target 会渗进来，不覆盖就会去交叉编译 Windows 而报错。
+# Apple Silicon 用下面这个；Intel Mac 改成 x86_64-apple-darwin。
+[build]
+target = "aarch64-apple-darwin"
